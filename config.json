@@ -1,0 +1,9 @@
+{
+    "config": {
+        "secure-http": false,
+        "gitlab-domains": [
+            "10.159.1.83",
+            "gitlab-ce.cyadmk.com"
+        ]
+    }
+}

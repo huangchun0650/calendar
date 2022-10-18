@@ -1,0 +1,79 @@
+image: registry.gitlab-ce.cyadmk.com:5000/docker/gitlab-ci-pipeline-for-laravel
+
+stages:
+  - build
+  - test
+  - deploy
+
+.init_rsync: &init_rsync |
+  echo ${RSYNC_SECRET} > /etc/rsync.secret
+  chmod 600 /etc/rsync.secret
+
+.change_file_permissions: &change_file_permissions |
+  find . -type f -not -path './vendor/*' -exec chmod 664 {} \;
+  find . -type d -not -path './vendor/*' -exec chmod 775 {} \;
+
+.change_file_owner: &change_file_owner |
+  addgroup -S de_us -g 503 && adduser -S de_us -G de_us -u 503
+  chown -R de_us.de_us ./
+  adduser -S apache -G de_us -u 48
+  chown -R apache:de_us storage && chown apache:de_us bootstrap/cache
+
+composer:
+  stage: build
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-composer
+    paths:
+      - vendor/
+  script:
+    - composer config secure-http false
+    - composer install --prefer-dist --no-ansi --no-interaction --no-progress --no-scripts --optimize-autoloader
+    - if [ -f .env.${CI_COMMIT_REF_SLUG} ]; then cp .env.${CI_COMMIT_REF_SLUG} .env; else cp .env.example .env; fi
+    - php artisan key:generate
+    - composer config secure-http true
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - vendor
+      - .env
+  only:
+    - testing
+    - staging
+    - master
+
+deploy-testing:
+  stage: deploy
+  script:
+    - *init_rsync
+    - *change_file_permissions
+    - *change_file_owner
+    - php artisan cache:clear
+    - php artisan vendor:publish --force --tag=support.lang
+    - rsync -av --delete --exclude-from=.rsync-exclude-rules --password-file=/etc/rsync.secret --port=${RSYNC_PORT_TESTING} ./ root@${RSYNC_HOST_TESTING}::${RSYNC_MODULE_TESTING}
+  only:
+    - testing
+    
+deploy-staging:
+  stage: deploy
+  script:
+    - *init_rsync
+    - *change_file_permissions
+    - *change_file_owner
+    - php artisan cache:clear
+    - php artisan vendor:publish --force --tag=support.lang
+    - rsync -av --delete --exclude-from=.rsync-exclude-rules --password-file=/etc/rsync.secret --port=${RSYNC_PORT_STAGING} ./ root@${RSYNC_HOST_STAGING}::${RSYNC_MODULE_STAGING}
+  only:
+    - staging
+
+deploy-production:
+  stage: deploy
+  script:
+    - *init_rsync
+    - *change_file_permissions
+    - *change_file_owner
+    - php artisan cache:clear
+    - php artisan vendor:publish --force --tag=support.lang
+    - rsync -av --delete --exclude-from=.rsync-exclude-rules --password-file=/etc/rsync.secret ./ root@${RSYNC_HOST_CLOUD_SUB}::${RSYNC_MODULE_MASTER}
+  when: manual
+  only:
+    - master
